@@ -474,7 +474,7 @@
                         <div class="kpi-label" style="margin-bottom:6px;">ばね・回帰設定</div>
                         <div style="display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:6px;">
                             <label style="display:flex; align-items:center; gap:6px; font-size:11px; color:#cbd5e1;">ばね定数 k[N/m]<input id="springK" type="number" step="0.01" value="10" style="width:72px;"></label>
-                            <label style="display:flex; align-items:center; gap:6px; font-size:11px; color:#cbd5e1;">回帰半窓幅<input id="regHalfWindow" type="number" min="1" max="20" step="1" value="2" style="width:72px;"></label>
+                            <label style="display:flex; align-items:center; gap:6px; font-size:11px; color:#cbd5e1;">回帰半窓幅<input id="regHalfWindow" type="number" min="1" max="20" step="1" value="7" style="width:72px;"></label>
                             <label style="display:flex; align-items:center; gap:6px; font-size:11px; color:#cbd5e1;">物体トラック<select id="massTrackSelect" style="background:#000; border:1px solid var(--border); color:#fff; padding:6px; border-radius:4px; font-size:12px;"><option value="obj1">物体1</option><option value="obj2">物体2</option></select></label>
                             <label style="display:flex; align-items:center; gap:6px; font-size:11px; color:#cbd5e1;">ばね端トラック<select id="springTrackSelect" style="background:#000; border:1px solid var(--border); color:#fff; padding:6px; border-radius:4px; font-size:12px;"><option value="obj2">物体2</option><option value="obj1">物体1</option></select></label>
                         </div>
@@ -802,7 +802,7 @@
                 const t = points.map(p => p.t);
                 const x = points.map(p => p.xm);
                 const y = points.map(p => p.ym);
-                const regHalfWindow = Math.max(1, Math.floor(parseFloat(regHalfWindowInput?.value) || 2));
+                const regHalfWindow = Math.max(1, Math.floor(parseFloat(regHalfWindowInput?.value) || 7));
                 const regX = localQuadraticDerivatives(t, x, regHalfWindow);
                 const regY = localQuadraticDerivatives(t, y, regHalfWindow);
                 const vx = regX.v;
@@ -877,7 +877,7 @@
 
                 const t = massPts.map(p => p.t);
                 const x = massPts.map(p => p.xm);
-                const half = Math.max(1, Math.floor(parseFloat(regHalfWindowInput?.value) || 2));
+                const half = Math.max(1, Math.floor(parseFloat(regHalfWindowInput?.value) || 7));
                 const reg = localQuadraticDerivatives(t, x, half);
                 const springAtT = pickTrackAtSameTimes(springPts, t);
 
@@ -968,14 +968,10 @@
 
                 const targetCount = Math.max(3, (halfWindow * 2) + 1);
                 for (let i = 0; i < n; i++) {
-                    let left = Math.max(0, i - halfWindow);
-                    let right = Math.min(n - 1, i + halfWindow);
-                    while ((right - left + 1) < Math.min(targetCount, n)) {
-                        if (left > 0) left--;
-                        if ((right - left + 1) >= Math.min(targetCount, n)) break;
-                        if (right < n - 1) right++;
-                        if (left === 0 && right === n - 1) break;
-                    }
+                    const left = i - halfWindow;
+                    const right = i + halfWindow;
+                    // 端点は「前後に半窓幅の点が揃っていない」ため非表示にする
+                    if (left < 0 || right >= n) continue;
 
                     const tx = [];
                     const yy = [];
@@ -986,7 +982,7 @@
                         }
                     }
 
-                    if (tx.length < 3) continue;
+                    if (tx.length < targetCount) continue;
                     const coeff = fitQuadratic(tx, yy);
                     if (!coeff) continue;
 
@@ -1165,7 +1161,7 @@
                 const t = points.map(p => p.t);
                 const x = points.map(p => p.xm);
                 const y = points.map(p => p.ym);
-                const regHalfWindow = Math.max(1, Math.floor(parseFloat(regHalfWindowInput?.value) || 2));
+                const regHalfWindow = Math.max(1, Math.floor(parseFloat(regHalfWindowInput?.value) || 7));
                 const regX = localQuadraticDerivatives(t, x, regHalfWindow);
                 const regY = localQuadraticDerivatives(t, y, regHalfWindow);
                 const vx = regX.v;
