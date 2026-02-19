@@ -174,7 +174,7 @@
             display: flex;
             flex-direction: column;
             gap: 6px;
-            min-height: 220px;
+            min-height: 280px;
         }
 
         .chart-controls {
@@ -186,7 +186,7 @@
 
         .chart-container {
             position: relative;
-            height: 200px;
+            height: 280px;
             background: var(--bg-panel);
             border: 1px solid var(--border);
             border-radius: var(--radius);
@@ -195,7 +195,7 @@
 
         /* Table Section */
         .table-section {
-            height: 200px;
+            height: 130px;
             background: var(--bg-panel);
             border: 1px solid var(--border);
             border-radius: var(--radius);
@@ -474,7 +474,6 @@
                         <div class="kpi-label" style="margin-bottom:6px;">ばね・回帰設定</div>
                         <div style="display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:6px;">
                             <label style="display:flex; align-items:center; gap:6px; font-size:11px; color:#cbd5e1;">ばね定数 k[N/m]<input id="springK" type="number" step="0.01" value="10" style="width:72px;"></label>
-                            <label style="display:flex; align-items:center; gap:6px; font-size:11px; color:#cbd5e1;">自然長 L0[m]<input id="springL0" type="number" step="0.001" value="0" style="width:72px;"></label>
                             <label style="display:flex; align-items:center; gap:6px; font-size:11px; color:#cbd5e1;">回帰半窓幅<input id="regHalfWindow" type="number" min="1" max="20" step="1" value="2" style="width:72px;"></label>
                             <label style="display:flex; align-items:center; gap:6px; font-size:11px; color:#cbd5e1;">物体トラック<select id="massTrackSelect" style="background:#000; border:1px solid var(--border); color:#fff; padding:6px; border-radius:4px; font-size:12px;"><option value="obj1">物体1</option><option value="obj2">物体2</option></select></label>
                             <label style="display:flex; align-items:center; gap:6px; font-size:11px; color:#cbd5e1;">ばね端トラック<select id="springTrackSelect" style="background:#000; border:1px solid var(--border); color:#fff; padding:6px; border-radius:4px; font-size:12px;"><option value="obj2">物体2</option><option value="obj1">物体1</option></select></label>
@@ -546,7 +545,6 @@
             const trackSelect = document.getElementById('trackSelect');
             const modeButtons = document.querySelectorAll('.modeBtn');
             const springKInput = document.getElementById('springK');
-            const springL0Input = document.getElementById('springL0');
             const regHalfWindowInput = document.getElementById('regHalfWindow');
             const massTrackSelect = document.getElementById('massTrackSelect');
             const springTrackSelect = document.getElementById('springTrackSelect');
@@ -881,16 +879,21 @@
                 const x = massPts.map(p => p.xm);
                 const half = Math.max(1, Math.floor(parseFloat(regHalfWindowInput?.value) || 2));
                 const reg = localQuadraticDerivatives(t, x, half);
-                const springAtT = interpolateTrackAtTimes(springPts, t);
+                const springAtT = pickTrackAtSameTimes(springPts, t);
 
                 const springK = parseFloat(springKInput?.value);
                 const k = Number.isFinite(springK) ? springK : 0;
-                const springL0 = parseFloat(springL0Input?.value);
-                const l0 = Number.isFinite(springL0) ? springL0 : 0;
+                let l0 = NaN;
+                for (let i = 0; i < massPts.length; i++) {
+                    const s = springAtT[i];
+                    if (!s || !Number.isFinite(s.xm) || !Number.isFinite(s.ym)) continue;
+                    l0 = Math.hypot(massPts[i].xm - s.xm, massPts[i].ym - s.ym);
+                    break;
+                }
 
                 const forceRaw = massPts.map((p, i) => {
                     const s = springAtT[i];
-                    if (!s || !Number.isFinite(s.xm) || !Number.isFinite(s.ym)) return NaN;
+                    if (!s || !Number.isFinite(s.xm) || !Number.isFinite(s.ym) || !Number.isFinite(l0)) return NaN;
                     const length = Math.hypot(p.xm - s.xm, p.ym - s.ym);
                     return k * (length - l0);
                 });
@@ -907,6 +910,16 @@
                     aNorm: t.map((tv, i) => ({ x: tv, y: aNormVals[i] })),
                     forceRaw
                 };
+            }
+
+            function pickTrackAtSameTimes(points, tSeries) {
+                if (!points || points.length === 0) return tSeries.map(() => ({ xm: NaN, ym: NaN }));
+                const map = new Map();
+                for (const p of points) map.set(p.t.toFixed(6), p);
+                return tSeries.map(t => {
+                    const p = map.get(t.toFixed(6));
+                    return p ? { xm: p.xm, ym: p.ym } : { xm: NaN, ym: NaN };
+                });
             }
 
             function interpolateTrackAtTimes(points, tSeries) {
@@ -1145,7 +1158,8 @@
             };
 
             const downloadCSV = () => {
-                const points = getCurrentPoints();
+                const massTrackId = massTrackSelect?.value || 'obj1';
+                const points = getTrackById(massTrackId)?.points || [];
                 if (!points.length) return alert('データがありません。');
                 let csv = "t[s],x[m],y[m],vx[m/s],vy[m/s],ax[m/s^2],ay[m/s^2],springForce[N]\n";
                 const t = points.map(p => p.t);
@@ -1166,7 +1180,7 @@
                 const blob = new Blob([csv], { type: 'text/csv' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
-                a.href = url; a.download = `motion_data_${currentTrackId}.csv`; a.click();
+                a.href = url; a.download = `motion_data_${massTrackId}.csv`; a.click();
             };
             btnCSV.onclick = downloadCSV;
             if (btnCSVMobile) btnCSVMobile.onclick = downloadCSV;
@@ -1190,7 +1204,7 @@
                 };
             }
 
-            [springKInput, springL0Input, regHalfWindowInput, massTrackSelect, springTrackSelect].forEach(el => {
+            [springKInput, regHalfWindowInput, massTrackSelect, springTrackSelect].forEach(el => {
                 if (!el) return;
                 el.addEventListener('input', () => recompute());
                 el.addEventListener('change', () => recompute());
