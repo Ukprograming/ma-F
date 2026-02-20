@@ -184,6 +184,40 @@
             padding-bottom: 2px;
         }
 
+        .panel-controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .series-toggle-row {
+            display: none;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 4px 6px;
+        }
+
+        .series-toggle-row label {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 10px;
+            color: #cbd5e1;
+            white-space: nowrap;
+        }
+
+        .series-swatch {
+            width: 6px;
+            height: 6px;
+            border-radius: 2px;
+            display: inline-block;
+        }
+
         .chart-container {
             position: relative;
             height: 280px;
@@ -440,7 +474,15 @@
 
         <div class="data-panel">
             <div class="scroll-area">
-                <div class="kpi-grid">
+                <div class="panel-controls">
+                    <label style="font-size:11px; color:#cbd5e1; display:flex; align-items:center; gap:4px;">
+                        <input id="chkPlotRange" type="checkbox">
+                        プロット時間のみ表示
+                    </label>
+                    <button id="btnToggleKpi" style="padding:3px 8px; font-size:10px;">指標を表示</button>
+                </div>
+
+                <div id="kpiGrid" class="kpi-grid" style="display:none;">
                     <div class="kpi-card">
                         <div class="kpi-label">計測点数</div>
                         <div id="kPoints" class="kpi-val">0</div>
@@ -469,6 +511,12 @@
                         <button class="modeBtn" data-mode="ayt" style="padding:4px 8px; font-size:11px;">ay</button>
                         <button class="modeBtn" data-mode="springnorm" style="padding:4px 8px; font-size:11px;">ばね比較</button>
                         <button id="btnPNGCurrent" style="margin-left:auto; padding:4px 6px; font-size:10px;">画像保存</button>
+                    </div>
+                    <div id="seriesToggleRow" class="series-toggle-row">
+                        <label><input id="seriesForce" type="checkbox" checked><span class="series-swatch" style="background:#f43f5e;"></span>弾性力</label>
+                        <label><input id="seriesPos" type="checkbox" checked><span class="series-swatch" style="background:#22c55e;"></span>位置</label>
+                        <label><input id="seriesVel" type="checkbox" checked><span class="series-swatch" style="background:#3b82f6;"></span>速度</label>
+                        <label><input id="seriesAcc" type="checkbox" checked><span class="series-swatch" style="background:#f59e0b;"></span>加速度</label>
                     </div>
                     <div class="kpi-card" style="padding:8px;">
                         <div class="kpi-label" style="margin-bottom:6px;">ばね・回帰設定</div>
@@ -548,6 +596,14 @@
             const regHalfWindowInput = document.getElementById('regHalfWindow');
             const massTrackSelect = document.getElementById('massTrackSelect');
             const springTrackSelect = document.getElementById('springTrackSelect');
+            const chkPlotRange = document.getElementById('chkPlotRange');
+            const btnToggleKpi = document.getElementById('btnToggleKpi');
+            const kpiGrid = document.getElementById('kpiGrid');
+            const seriesToggleRow = document.getElementById('seriesToggleRow');
+            const seriesForce = document.getElementById('seriesForce');
+            const seriesPos = document.getElementById('seriesPos');
+            const seriesVel = document.getElementById('seriesVel');
+            const seriesAcc = document.getElementById('seriesAcc');
 
             // State
             const TRACKS = [
@@ -593,6 +649,37 @@
 
             function getTrackById(trackId) {
                 return tracks[trackId];
+            }
+
+            function applyTimeRangeByDataset(datasetList) {
+                const lockToPlot = !!chkPlotRange?.checked;
+                if (!lockToPlot) {
+                    ch.options.scales.x.min = 0;
+                    ch.options.scales.x.max = undefined;
+                    return;
+                }
+                const validX = [];
+                for (const ds of datasetList || []) {
+                    for (const p of (ds?.data || [])) {
+                        if (Number.isFinite(p?.x) && Number.isFinite(p?.y)) validX.push(p.x);
+                    }
+                }
+                if (!validX.length) {
+                    ch.options.scales.x.min = 0;
+                    ch.options.scales.x.max = undefined;
+                    return;
+                }
+                const lo = Math.min(...validX);
+                const hi = Math.max(...validX);
+                if (Math.abs(hi - lo) < 1e-9) {
+                    const pad = 0.05;
+                    ch.options.scales.x.min = Math.max(0, lo - pad);
+                    ch.options.scales.x.max = lo + pad;
+                    return;
+                }
+                const pad = (hi - lo) * 0.02;
+                ch.options.scales.x.min = Math.max(0, lo - pad);
+                ch.options.scales.x.max = hi + pad;
             }
 
             function refreshCurrentTrackInfo() {
@@ -817,16 +904,18 @@
                 if (mode === 'springnorm') {
                     const springData = buildSpringOverlaySeries();
                     ch.data.labels = [];
-                    ch.data.datasets = [
-                        { label: '弾性力(正規化)', data: springData.fNorm, pointRadius: 0, tension: 0, borderColor: '#f43f5e', backgroundColor: '#f43f5e' },
-                        { label: '位置(正規化)', data: springData.xNorm, pointRadius: 0, tension: 0, borderColor: '#22c55e', backgroundColor: '#22c55e' },
-                        { label: '速度(正規化)', data: springData.vNorm, pointRadius: 0, tension: 0, borderColor: '#3b82f6', backgroundColor: '#3b82f6' },
-                        { label: '加速度(正規化)', data: springData.aNorm, pointRadius: 0, tension: 0, borderColor: '#f59e0b', backgroundColor: '#f59e0b' }
-                    ];
-                    ch.options.plugins.legend.display = true;
+                    const datasets = [];
+                    if (seriesForce?.checked !== false) datasets.push({ label: '弾性力(正規化)', data: springData.fNorm, pointRadius: 0, tension: 0, borderColor: '#f43f5e', backgroundColor: '#f43f5e' });
+                    if (seriesPos?.checked !== false) datasets.push({ label: '位置(正規化)', data: springData.xNorm, pointRadius: 0, tension: 0, borderColor: '#22c55e', backgroundColor: '#22c55e' });
+                    if (seriesVel?.checked !== false) datasets.push({ label: '速度(正規化)', data: springData.vNorm, pointRadius: 0, tension: 0, borderColor: '#3b82f6', backgroundColor: '#3b82f6' });
+                    if (seriesAcc?.checked !== false) datasets.push({ label: '加速度(正規化)', data: springData.aNorm, pointRadius: 0, tension: 0, borderColor: '#f59e0b', backgroundColor: '#f59e0b' });
+                    ch.data.datasets = datasets;
+                    ch.options.plugins.legend.display = false;
                     ch.options.scales.y.title.text = '正規化値 [0..1]';
                     ch.options.scales.y.min = 0;
                     ch.options.scales.y.max = 1;
+                    applyTimeRangeByDataset(ch.data.datasets);
+                    if (seriesToggleRow) seriesToggleRow.style.display = 'flex';
                     ch.update();
                     modeButtons.forEach(b => {
                         b.style.backgroundColor = (b.dataset.mode === mode) ? '#2563eb' : '#334155';
@@ -843,6 +932,7 @@
                     case 'axt': data = ax; ylabel = 'ax [m/s^2]'; break;
                     case 'ayt': data = ay; ylabel = 'ay [m/s^2]'; break;
                 }
+                if (seriesToggleRow) seriesToggleRow.style.display = 'none';
                 ch.options.plugins.legend.display = false;
                 if (t && t.length > 0 && data && data.length > 0) {
                     const scatterData = t.map((timeVal, i) => ({ x: timeVal, y: data[i] }));
@@ -852,6 +942,7 @@
                 }
                 ch.data.labels = [];
                 ch.options.scales.y.title.text = ylabel;
+                applyTimeRangeByDataset(ch.data.datasets);
 
                 if (Array.isArray(data) && data.length) {
                     let dmin = Infinity, dmax = -Infinity;
@@ -1205,6 +1296,18 @@
                 el.addEventListener('input', () => recompute());
                 el.addEventListener('change', () => recompute());
             });
+            [chkPlotRange, seriesForce, seriesPos, seriesVel, seriesAcc].forEach(el => {
+                if (!el) return;
+                el.addEventListener('input', () => recompute());
+                el.addEventListener('change', () => recompute());
+            });
+            if (btnToggleKpi && kpiGrid) {
+                btnToggleKpi.onclick = () => {
+                    const hidden = kpiGrid.style.display === 'none';
+                    kpiGrid.style.display = hidden ? 'grid' : 'none';
+                    btnToggleKpi.textContent = hidden ? '指標を隠す' : '指標を表示';
+                };
+            }
 
             file.addEventListener('change', async (e) => {
                 if (!e.target.files || !e.target.files[0]) return;
