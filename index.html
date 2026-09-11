@@ -409,6 +409,38 @@
                 padding: 6px 10px;
             }
         }
+
+        header { height:auto; min-height:48px; flex-wrap:wrap; gap:8px; padding:10px 12px; }
+        header > div:first-child { flex-wrap:wrap; min-width:0; }
+        #file { max-width:240px; width:100%; }
+        .header-controls { display:flex; flex-wrap:wrap; }
+        .header-controls button { min-height:36px; }
+        .data-panel { width:var(--data-width, 440px); min-width:0; }
+        .scroll-area, .chart-section { min-height:0; }
+        .chart-section, .table-section { flex-shrink:0; }
+        .chart-controls { flex-wrap:wrap; }
+        .tool-group { flex-wrap:wrap; max-width:100%; }
+        #sessionStatus { margin:0; padding:7px 12px; color:var(--text-muted); font-size:12px; background:var(--bg-panel); overflow-wrap:anywhere; }
+        .splitter { flex:0 0 10px; background:var(--border); cursor:col-resize; touch-action:none; }
+        .splitter:hover, .splitter:focus { background:var(--primary); }
+        .modeBtn[aria-pressed="true"] { background:var(--primary); outline:1px solid #93c5fd; }
+        .table-section { resize:vertical; min-height:110px; max-height:70vh; }
+        .timeline { display:flex; align-items:center; gap:10px; padding:6px 12px; background:var(--bg-panel); }
+        #videoSeek { flex:1; min-width:30px; width:auto; }
+        #videoTime { font-size:12px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+        body.graph-focus .video-panel, body.graph-focus .splitter { display:none; }
+        body.graph-focus .data-panel { width:100%; flex:1; }
+        body.graph-focus .chart-container { height:60vh; }
+        button:focus-visible, input:focus-visible, select:focus-visible { outline:2px solid #93c5fd; outline-offset:2px; }
+        @media (max-width:820px) {
+            .header-controls { display:flex; }
+            .video-panel { position:relative; }
+            .data-panel { width:100%; }
+            .splitter { display:none; }
+            .toolbar { overflow:visible; }
+            .canvas-wrapper { height:clamp(180px, 40vh, 420px); }
+            .scroll-area { padding:8px; }
+        }
     </style>
 </head>
 
@@ -419,11 +451,16 @@
             <input id="file" type="file" accept="video/*" />
         </div>
         <div class="header-controls">
+            <button id="btnAnalysisSave" title="動画を除く計測点・設定をJSONに保存">解析保存</button>
+            <button id="btnAnalysisOpen">解析を開く</button>
+            <button id="btnCancelRestore" hidden>復元待ちを取消</button>
+            <input id="analysisFile" type="file" accept=".json,application/json" hidden>
             <button id="btnDemo" class="warn" style="padding:4px 8px; font-size:11px;">デモ</button>
             <button id="btnCSV" class="primary" style="padding:4px 8px; font-size:11px;">CSV</button>
         </div>
     </header>
 
+    <p id="sessionStatus" role="status" aria-live="polite">動画を選択 → スケール設定 → 座標軸設定 → 計測開始。解析保存には動画を含みません。</p>
     <div class="app-grid">
         <div class="video-panel">
             <div class="canvas-wrapper">
@@ -434,6 +471,7 @@
                 </div>
             </div>
 
+            <div class="timeline"><input id="videoSeek" aria-label="動画の再生位置" type="range" min="0" max="1" step="0.001" value="0" disabled><output id="videoTime">0.000 / 0.000 s</output></div>
             <div class="toolbar">
                 <div class="tool-group">
                     <button id="btnPrev" class="icon-btn">◀</button>
@@ -472,6 +510,7 @@
             </div>
         </div>
 
+        <div id="splitter" class="splitter" role="separator" tabindex="0" aria-label="動画とデータ欄の幅を調整。左右キーでも調整できます" aria-orientation="vertical"></div>
         <div class="data-panel">
             <div class="scroll-area">
                 <div class="panel-controls">
@@ -510,6 +549,7 @@
                         <button class="modeBtn" data-mode="axt" style="padding:4px 8px; font-size:11px;">ax</button>
                         <button class="modeBtn" data-mode="ayt" style="padding:4px 8px; font-size:11px;">ay</button>
                         <button class="modeBtn" data-mode="springnorm" style="padding:4px 8px; font-size:11px;">ばね比較</button>
+                        <button id="btnGraphOnly" aria-pressed="false">グラフ拡大</button>
                         <button id="btnPNGCurrent" style="margin-left:auto; padding:4px 6px; font-size:10px;">画像保存</button>
                     </div>
                     <div id="seriesToggleRow" class="series-toggle-row">
@@ -559,6 +599,7 @@
         </div>
     </div>
 
+    <script src="analysis-store.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script>
         (() => {
@@ -638,6 +679,116 @@
                 }
             });
             let mode = 'xt';
+            let currentVideoInfo = null, pendingAnalysis = null, videoReady = false, dirty = false, loadingVideo = false;
+            const status = document.getElementById('sessionStatus');
+            const seek = document.getElementById('videoSeek');
+            const settingsInputs = [fpsInput, calibLengthInput, springKInput, regHalfWindowInput, massTrackSelect, springTrackSelect, autoStep, chkPlotRange, seriesForce, seriesPos, seriesVel, seriesAcc, trackSelect];
+            settingsInputs.forEach(el => el.addEventListener('input', () => { dirty = true; }));
+            const cancelRestore = document.getElementById('btnCancelRestore');
+            cancelRestore.onclick = () => { pendingAnalysis = null; cancelRestore.hidden = true; status.textContent = '復元待ちを取り消しました。現在の解析を続けられます。'; };
+            function allowReplace() {
+                return !dirty || confirm('未保存の変更があります。「解析保存」で保存できます。変更を破棄して続けますか？（キャンセルで戻ります）');
+            }
+            window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+            function makePayload() {
+                return AnalysisStore.validate({
+                    format:'ma-f-analysis', version:1, video:currentVideoInfo,
+                    analysis: { tracks, scalePxPerMeter, axis, axisActive, currentTrackId, currentTime:video.currentTime,
+                        settings: { fps:Number(fpsInput.value), calibrationLength:Number(calibLengthInput.value), springK:Number(springKInput.value),
+                            regressionHalfWindow:Number(regHalfWindowInput.value), massTrack:massTrackSelect.value, springTrack:springTrackSelect.value,
+                            mode, autoStep:autoStep.checked, plotRange:chkPlotRange.checked, series:[seriesForce.checked, seriesPos.checked, seriesVel.checked, seriesAcc.checked] }
+                    }
+                });
+            }
+            document.getElementById('btnAnalysisSave').onclick = () => {
+                if (!videoReady || !currentVideoInfo) return alert('先に動画を読み込んでください。');
+                try {
+                    const payload = makePayload();
+                    const url = URL.createObjectURL(new Blob([JSON.stringify({ ...payload, savedAt:new Date().toISOString() }, null, 2)], {type:'application/json'}));
+                    const link = document.createElement('a');
+                    link.href = url; link.download = currentVideoInfo.name.replace(/\.[^.]+$/, '').replace(/[<>:"/\\|?*]/g, '_') + '.ma-f.json'; link.click();
+                    setTimeout(() => URL.revokeObjectURL(url), 1000);
+                    dirty = false; status.textContent = '解析ファイルのダウンロードを開始しました。元動画も一緒に保管してください。';
+                } catch (_) { alert('設定値を確認してください。FPSは1〜240、基準長は正の数、ばね定数は0以上、回帰半窓幅は1〜20の整数にしてください。'); }
+            };
+            function matchesVideo(saved, loaded) {
+                return saved.name === loaded.name && (saved.size === null || loaded.size === null || saved.size === loaded.size)
+                    && saved.width === loaded.width && saved.height === loaded.height && Math.abs(saved.duration - loaded.duration) < 0.1;
+            }
+            function applyAnalysis(payload) {
+                const a = payload.analysis, s = a.settings;
+                video.pause();
+                tracks = a.tracks; scalePxPerMeter = a.scalePxPerMeter; axis = a.axis; axisActive = a.axisActive;
+                currentTrackId = a.currentTrackId; trackSelect.value = currentTrackId;
+                calibMode = calibDragging = axisMode = false; calibStart = calibEnd = null;
+                fpsInput.value = s.fps; calibLengthInput.value = s.calibrationLength; springKInput.value = s.springK;
+                regHalfWindowInput.value = s.regressionHalfWindow; massTrackSelect.value = s.massTrack; springTrackSelect.value = s.springTrack;
+                autoStep.checked = s.autoStep; chkPlotRange.checked = s.plotRange;
+                [seriesForce, seriesPos, seriesVel, seriesAcc].forEach((el, i) => { el.checked = s.series[i]; });
+                mode = s.mode; btnCalib.disabled = false; btnAxis.disabled = !scalePxPerMeter;
+                btnStartPlot.disabled = !scalePxPerMeter;
+                btnStartPlot.textContent = axisActive ? '計測を停止' : '計測開始';
+                kFPS.textContent = Number(s.fps).toFixed(2);
+                kScale.textContent = scalePxPerMeter ? scalePxPerMeter.toFixed(2) : '--';
+                scaleInfo.textContent = scalePxPerMeter ? `スケール: ${scalePxPerMeter.toFixed(2)} px/m` : 'スケール: 未設定';
+                video.currentTime = a.currentTime;
+                refreshCurrentTrackInfo(); recompute(); drawFrame(); updateTimeline(); dirty = false;
+                status.textContent = '解析を復元しました：' + payload.video.name + '。計測点・ばね設定・グラフを復元済みです。';
+            }
+            const analysisFile = document.getElementById('analysisFile');
+            document.getElementById('btnAnalysisOpen').onclick = () => { analysisFile.click(); };
+            analysisFile.onchange = async () => {
+                const selected = analysisFile.files?.[0];
+                if (!selected) return;
+                try {
+                    if (selected.size > 30 * 1024 * 1024) throw new Error('解析ファイルは30 MB以下にしてください。');
+                    const payload = AnalysisStore.validate(JSON.parse(await selected.text()));
+                    if (!allowReplace()) return;
+                    if (videoReady && matchesVideo(payload.video, currentVideoInfo)) { pendingAnalysis = null; cancelRestore.hidden = true; applyAnalysis(payload); }
+                    else {
+                        pendingAnalysis = payload;
+                        cancelRestore.hidden = false;
+                        status.textContent = '復元待ち：元動画「' + payload.video.name + '」を選択してください。現在の解析は動画が一致するまで保持します。';
+                    }
+                } catch (error) { alert(error instanceof SyntaxError ? 'JSONを読み取れません。解析保存で作成したファイルを選んでください。' : error.message); }
+                finally { analysisFile.value = ''; }
+            };
+            function updateTimeline() {
+                seek.disabled = !videoReady;
+                seek.max = videoReady ? video.duration : 1;
+                seek.value = video.currentTime || 0;
+                document.getElementById('videoTime').textContent = `${(video.currentTime || 0).toFixed(3)} / ${(videoReady ? video.duration : 0).toFixed(3)} s`;
+            }
+            video.addEventListener('timeupdate', updateTimeline);
+            seek.oninput = () => { if (videoReady) { video.pause(); video.currentTime = Number(seek.value); } };
+            const graphToggle = document.getElementById('btnGraphOnly');
+            graphToggle.onclick = () => {
+                const active = document.body.classList.toggle('graph-focus');
+                graphToggle.textContent = active ? '動画とデータに戻す' : 'グラフ拡大';
+                graphToggle.setAttribute('aria-pressed', String(active));
+                requestAnimationFrame(() => { ch.resize(); resizeCanvasToVideo(); drawFrame(); });
+            };
+            document.addEventListener('keydown', e => { if (e.key === 'Escape' && document.body.classList.contains('graph-focus')) graphToggle.click(); });
+            const splitter = document.getElementById('splitter');
+            let resizePointer = null;
+            function setDataWidth(width) {
+                const total = document.querySelector('.app-grid').clientWidth;
+                const bounded = Math.max(320, Math.min(total - 280, width));
+                document.body.style.setProperty('--data-width', bounded + 'px');
+                splitter.setAttribute('aria-valuemin', '320');
+                splitter.setAttribute('aria-valuemax', Math.max(320, total - 280));
+                splitter.setAttribute('aria-valuenow', Math.round(bounded));
+                resizeCanvasToVideo(); drawFrame(); ch.resize();
+            }
+            splitter.onpointerdown = e => { resizePointer = e.pointerId; splitter.setPointerCapture(e.pointerId); e.preventDefault(); };
+            splitter.onpointermove = e => { if (resizePointer === e.pointerId) setDataWidth(document.querySelector('.app-grid').getBoundingClientRect().right - e.clientX); };
+            splitter.onpointerup = splitter.onpointercancel = () => { resizePointer = null; };
+            splitter.onkeydown = e => {
+                if (!['ArrowLeft','ArrowRight'].includes(e.key)) return;
+                e.preventDefault(); setDataWidth(document.querySelector('.data-panel').clientWidth + (e.key === 'ArrowLeft' ? 30 : -30));
+            };
+            window.addEventListener('resize', () => { if (innerWidth > 820) setDataWidth(document.querySelector('.data-panel').clientWidth); });
+
 
             function getCurrentTrack() {
                 return tracks[currentTrackId];
@@ -696,9 +847,6 @@
                 const vh = video.videoHeight || 360;
                 canvas.width = vw;
                 canvas.height = vh;
-                if (axis.ox === 0 && axis.oy === 0) {
-                    axis.ox = vw / 2; axis.oy = vh / 2;
-                }
                 drawFrame();
             }
             window.addEventListener('resize', () => { setTimeout(resizeCanvasToVideo, 100); });
@@ -802,6 +950,7 @@
                 if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
                 const p = getXY(e);
 
+                if (!videoReady) return;
                 if (axisMode) {
                     const ex = { x: Math.cos(axis.theta), y: Math.sin(axis.theta) };
                     const hx = axis.ox + ex.x * AXIS_HANDLE_LEN;
@@ -818,7 +967,7 @@
                     drawFrame(); return;
                 }
 
-                if (btnStartPlot.disabled && !axisActive) {
+                if (!axisActive) {
                     if (scalePxPerMeter == null) alert('先にスケール設定を行ってください。');
                     else alert('先に座標軸（原点・向き）を設定してください。');
                     return;
@@ -844,6 +993,7 @@
                 const refMetersRaw = parseFloat(calibLengthInput?.value);
                 const refMeters = Number.isFinite(refMetersRaw) && refMetersRaw > 0 ? refMetersRaw : 1;
                 if (dpx > 0) {
+                    dirty = true;
                     scalePxPerMeter = dpx / refMeters;
                     const refMetersLabel = Number.isInteger(refMeters) ? String(refMeters) : refMeters.toFixed(3).replace(/\.?0+$/, '');
                     scaleInfo.textContent = `スケール: ${dpx.toFixed(1)} px = ${refMetersLabel} m`;
@@ -876,7 +1026,10 @@
                 const xm = loc.xm - (current.origin?.xm ?? 0);
                 const ym = loc.ym - (current.origin?.ym ?? 0);
 
+                const same = current.points.findIndex(p => Math.abs(p.t - t) < 0.5 / (Number(fpsInput.value) || 30));
+                if (same >= 0) current.points.splice(same, 1);
                 current.points.push({ t, xpx, ypx, xm, ym });
+                dirty = true;
                 current.points.sort((a, b) => a.t - b.t);
                 refreshCurrentTrackInfo();
                 recompute();
@@ -884,6 +1037,7 @@
             }
 
             function recompute() {
+                modeButtons.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
                 const points = getCurrentPoints();
                 if (points.length === 0) { renderTable([], [], [], [], [], [], []); updateMainChart([], [], [], [], [], [], []); return; }
                 const t = points.map(p => p.t);
@@ -1205,23 +1359,31 @@
             btnPlay.onclick = () => { if (!playing) { video.play(); } else { video.pause(); } };
 
             btnCalib.onclick = () => {
+                if (!videoReady) return alert('先に動画を読み込んでください。');
+                video.pause(); axisActive = false; axisMode = false;
+                btnStartPlot.textContent = '計測開始';
                 calibMode = true; calibDragging = false; calibStart = calibEnd = null;
                 btnCalib.disabled = true; scaleInfo.textContent = 'ドラッグして基準長を指定';
             };
             btnAxis.onclick = () => {
+                video.pause(); dirty = true;
                 axisMode = true; axisActive = false;
                 btnStartPlot.disabled = false;
+                btnStartPlot.textContent = '計測開始';
                 drawFrame();
             };
             btnStartPlot.onclick = () => {
-                axisMode = false; axisActive = true;
-                btnStartPlot.disabled = true;
+                video.pause(); axisMode = false; axisActive = !axisActive;
+                btnStartPlot.textContent = axisActive ? '計測を停止' : '計測開始';
+                dirty = true;
                 drawFrame();
             };
             btnUndo.onclick = async () => {
                 const points = getCurrentPoints();
                 if (points.length) {
                     points.pop();
+                    if (!points.length) getCurrentTrack().origin = null;
+                    dirty = true;
                     refreshCurrentTrackInfo();
                     recompute();
                     // 1フレーム戻す
@@ -1229,18 +1391,8 @@
                 }
             };
             btnClear.onclick = () => {
-                if (confirm('記録した計測点をすべて削除しますか？')) {
-                    tracks = Object.fromEntries(TRACKS.map(t => [t.id, { points: [], origin: null }]));
-                    calibMode = false; calibDragging = false; calibStart = calibEnd = null;
-                    axisActive = false; axisMode = false;
-                    btnAxis.disabled = true;
-                    btnStartPlot.disabled = true;
-                    kPoints.textContent = '0'; kTime.textContent = '0.000'; originInfo.textContent = '原点: 未設定';
-                    scaleInfo.textContent = 'スケール: 未設定';
-                    kScale.textContent = '--';
-                    if (massTrackSelect) massTrackSelect.value = 'obj1';
-                    if (springTrackSelect) springTrackSelect.value = 'obj2';
-                    drawFrame(); recompute(); refreshCurrentTrackInfo();
+                if (confirm('記録した計測点とスケール・座標軸をすべて削除しますか？')) {
+                    resetAll(); dirty = true; drawFrame();
                 }
             };
 
@@ -1264,10 +1416,11 @@
                 for (let i = 0; i < points.length; i++) {
                     csv += `${t[i]},${x[i]},${y[i]},${vx[i]},${vy[i]},${ax[i]},${ay[i]},${force[i]}` + "\n";
                 }
-                const blob = new Blob([csv], { type: 'text/csv' });
+                const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url; a.download = `motion_data_${massTrackId}.csv`; a.click();
+                setTimeout(() => URL.revokeObjectURL(url), 1000);
             };
             btnCSV.onclick = downloadCSV;
             if (btnCSVMobile) btnCSVMobile.onclick = downloadCSV;
@@ -1278,7 +1431,7 @@
                 a.href = url; a.download = 'chart.png'; a.click();
             };
             modeButtons.forEach(btn => {
-                btn.onclick = () => { mode = btn.dataset.mode; recompute(); };
+                btn.onclick = () => { mode = btn.dataset.mode; dirty = true; recompute(); };
             });
             if (trackSelect) {
                 trackSelect.value = currentTrackId;
@@ -1309,40 +1462,59 @@
                 };
             }
 
-            file.addEventListener('change', async (e) => {
-                if (!e.target.files || !e.target.files[0]) return;
-                await loadVideo(URL.createObjectURL(e.target.files[0]));
+            file.addEventListener('change', async e => {
+                const selected = e.target.files?.[0];
+                if (!selected) return;
+                try { await loadVideo(URL.createObjectURL(selected), { name: selected.name, size: selected.size }); }
+                catch (error) { alert(error.message); }
+                file.value = '';
             });
             btnDemo.onclick = async () => {
-                try { await loadVideo(DEMO_URL); } catch (e) { alert('デモ動画を読み込めませんでした。'); }
+                try { await loadVideo(DEMO_URL, { name: 'demo_faststart.mp4', size: null }); }
+                catch (error) { alert(error.message); }
             };
 
-            async function loadVideo(url) {
-                resetAll();
-                video.src = url;
-                video.load();
-                await new Promise(res => video.addEventListener('loadedmetadata', res, { once: true }));
-
-                detectFPSOnce();
-
-                resizeCanvasToVideo();
-                drawFrame();
-            }
-
-            function resetAllLegacy() {
-                tracks = Object.fromEntries(TRACKS.map(t => [t.id, { points: [], origin: null }]));
-                currentTrackId = 'obj1';
-                if (trackSelect) trackSelect.value = currentTrackId;
-                scalePxPerMeter = null; calibMode = false; calibDragging = false;
-                axisActive = false; axisMode = false; axis.theta = 0;
-                btnAxis.disabled = true; btnStartPlot.disabled = true;
-                kPoints.textContent = '0'; kTime.textContent = '0.000'; kScale.textContent = '--';
-                scaleInfo.textContent = 'スケール: 未設定';
-                if (massTrackSelect) massTrackSelect.value = 'obj1';
-                if (springTrackSelect) springTrackSelect.value = 'obj2';
-                originInfo.textContent = '原点: 未設定';
-                ch.data.labels = []; ch.data.datasets[0].data = []; ch.update();
-                recompute();
+            async function loadVideo(url, info) {
+                if (loadingVideo) { if (url.startsWith('blob:')) URL.revokeObjectURL(url); return; }
+                if (!pendingAnalysis && !allowReplace()) { if (url.startsWith('blob:')) URL.revokeObjectURL(url); return; }
+                loadingVideo = true;
+                const loadControls = [file, btnDemo, document.getElementById('btnAnalysisOpen'), cancelRestore];
+                loadControls.forEach(el => { el.disabled = true; });
+                const probe = document.createElement('video');
+                probe.preload = 'metadata';
+                try {
+                    await new Promise((resolve, reject) => {
+                        const timer = setTimeout(() => finish(new Error('動画の読み込みがタイムアウトしました。')), 15000);
+                        function finish(error) { clearTimeout(timer); probe.onloadedmetadata = probe.onerror = null; error ? reject(error) : resolve(); }
+                        probe.onloadedmetadata = () => finish();
+                        probe.onerror = () => finish(new Error('動画を読み込めません。MP4など対応する形式を選んでください。'));
+                        probe.src = url;
+                    });
+                    if (!Number.isFinite(probe.duration) || !probe.videoWidth) throw new Error('動画の長さまたはサイズを取得できません。');
+                    if (pendingAnalysis && !matchesVideo(pendingAnalysis.video, { ...info, duration:probe.duration, width:probe.videoWidth, height:probe.videoHeight })) {
+                        throw new Error('解析保存時と動画の名前・サイズ・長さ・解像度が一致しません。対応する元動画を選択してください。');
+                    }
+                    video.pause(); videoReady = false;
+                    const oldUrl = video.getAttribute('src');
+                    await new Promise((resolve, reject) => {
+                        const timer = setTimeout(() => finish(new Error('動画を表示できませんでした。')), 15000);
+                        function finish(error) { clearTimeout(timer); video.onloadeddata = video.onerror = null; error ? reject(error) : resolve(); }
+                        video.onloadeddata = () => finish();
+                        video.onerror = () => finish(new Error('動画を表示できませんでした。'));
+                        video.src = url; video.load();
+                    });
+                    currentVideoInfo = { ...info, duration:video.duration, width:video.videoWidth, height:video.videoHeight };
+                    videoReady = true;
+                    resetAll(); resizeCanvasToVideo();
+                    if (pendingAnalysis) { const saved = pendingAnalysis; pendingAnalysis = null; cancelRestore.hidden = true; applyAnalysis(saved); }
+                    else { dirty = false; status.textContent = info.name + '：スケール設定から計測を始めてください。'; }
+                    if (oldUrl?.startsWith('blob:')) URL.revokeObjectURL(oldUrl);
+                    updateTimeline(); drawFrame();
+                } catch (error) { if (url.startsWith('blob:') && video.getAttribute('src') !== url) URL.revokeObjectURL(url); throw error; }
+                finally {
+                    probe.removeAttribute('src'); probe.load(); loadingVideo = false;
+                    loadControls.forEach(el => { el.disabled = false; });
+                }
             }
 
             function resetAll() {
@@ -1354,16 +1526,19 @@
                 calibDragging = false;
                 axisActive = false;
                 axisMode = false;
-                axis.theta = 0;
+                axis = { ox:(video.videoWidth || 640) / 2, oy:(video.videoHeight || 360) / 2, theta:0 };
+                calibStart = calibEnd = null;
+                btnCalib.disabled = false;
                 btnAxis.disabled = true;
                 btnStartPlot.disabled = true;
+                btnStartPlot.textContent = '計測開始';
                 kScale.textContent = '--';
                 scaleInfo.textContent = 'スケール: 未設定';
                 if (massTrackSelect) massTrackSelect.value = 'obj1';
                 if (springTrackSelect) springTrackSelect.value = 'obj2';
                 refreshCurrentTrackInfo();
                 ch.data.labels = [];
-                ch.data.datasets[0].data = [];
+                ch.data.datasets.forEach(ds => { ds.data = []; });
                 ch.update();
                 recompute();
             }
@@ -1373,7 +1548,7 @@
                 const points = getCurrentPoints();
                 let html = '';
                 for (let i = 0; i < points.length; i++) {
-                    html += `<tr><td>${i}</td><td>${(t[i] ?? NaN).toFixed(3)}</td><td>${(x[i] ?? NaN).toFixed(3)}</td><td>${(y[i] ?? NaN).toFixed(3)}</td><td>${(vx[i] ?? NaN).toFixed(2)}</td><td>${(vy[i] ?? NaN).toFixed(2)}</td></tr>`;
+                    html += `<tr><td>${i}</td><td>${(t[i] ?? NaN).toFixed(3)}</td><td>${(x[i] ?? NaN).toFixed(3)}</td><td>${(y[i] ?? NaN).toFixed(3)}</td><td>${(Number.isFinite(vx[i]) ? vx[i].toFixed(2) : '—')}</td><td>${(Number.isFinite(vy[i]) ? vy[i].toFixed(2) : '—')}</td></tr>`;
                 }
                 tb.innerHTML = html;
             }
