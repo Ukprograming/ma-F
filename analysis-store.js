@@ -45,7 +45,9 @@
             format: 'ma-f-analysis', version: 1,
             video: { name: v.name, size: v.size === null ? null : num(v.size, 0), duration: num(v.duration, 0.000001), width: num(v.width, 1, 32768), height: num(v.height, 1, 32768) },
             analysis: { tracks, scalePxPerMeter: scale, axis: { ox: num(a.axis?.ox), oy: num(a.axis?.oy), theta: num(a.axis?.theta) },
-                axisActive: bool(a.axisActive), currentTrackId: id(a.currentTrackId), currentTime: num(a.currentTime, 0, v.duration), settings }
+                axisActive: bool(a.axisActive),
+                measurementStarted: a.measurementStarted === undefined ? (a.axisActive || Object.values(tracks).some(t => t.points.length > 0)) : bool(a.measurementStarted),
+                currentTrackId: id(a.currentTrackId), currentTime: num(a.currentTime, 0, v.duration), settings }
         };
     }
     root.AnalysisStore = { validate };

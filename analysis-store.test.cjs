@@ -6,7 +6,7 @@ const vm = require('node:vm');
 function fixture() {
     return {format:'ma-f-analysis',version:1,video:{name:'test.mp4',size:123,duration:2,width:640,height:360},
         analysis:{tracks:{obj1:{origin:{xm:0,ym:0},points:[{t:0,xpx:10,ypx:20,xm:0,ym:0},{t:1,xpx:20,ypx:30,xm:1,ym:1}]},obj2:{origin:null,points:[]}},
-            scalePxPerMeter:10,axis:{ox:320,oy:180,theta:0},axisActive:true,currentTrackId:'obj1',currentTime:1,
+            scalePxPerMeter:10,axis:{ox:320,oy:180,theta:0},axisActive:true,measurementStarted:true,currentTrackId:'obj1',currentTime:1,
             settings:{fps:30,calibrationLength:1,springK:25,regressionHalfWindow:7,massTrack:'obj1',springTrack:'obj2',mode:'springnorm',autoStep:true,plotRange:false,series:[true,false,true,true]}}};
 }
 test('JSON round trip preserves both tracks, physics and graph settings', () => {

@@ -420,6 +420,7 @@
         .chart-section, .table-section { flex-shrink:0; }
         .chart-controls { flex-wrap:wrap; }
         .tool-group { flex-wrap:wrap; max-width:100%; }
+        .tool-group[hidden] { display:none; }
         #sessionStatus { margin:0; padding:7px 12px; color:var(--text-muted); font-size:12px; background:var(--bg-panel); overflow-wrap:anywhere; }
         .splitter { flex:0 0 10px; background:var(--border); cursor:col-resize; touch-action:none; }
         .splitter:hover, .splitter:focus { background:var(--primary); }
@@ -487,11 +488,13 @@
                     </label>
                 </div>
 
-                <div class="tool-group">
+                <div id="measurementSetup" class="tool-group">
                     <button id="btnCalib" class="accent">スケール設定</button>
                     <span style="font-size:11px; color:#aaa;">基準長[m]</span>
                     <input id="calibLength" type="number" step="0.01" min="0.001" value="1" style="width:72px;">
                     <button id="btnAxis" class="accent" disabled>座標軸設定</button>
+                </div>
+                <div class="tool-group">
                     <button id="btnStartPlot" class="primary" disabled>計測開始</button>
                 </div>
 
@@ -661,6 +664,10 @@
             let calibStart = null, calibEnd = null, calibDragging = false;
             let axisMode = false;
             let axisActive = false;
+            let measurementStarted = false;
+            function updateMeasurementSetupVisibility() {
+                document.getElementById('measurementSetup').hidden = measurementStarted;
+            }
             let axis = { ox: 0, oy: 0, theta: 0 };
             const AXIS_HANDLE_R = 12;
             const AXIS_HANDLE_LEN = 80;
@@ -693,7 +700,7 @@
             function makePayload() {
                 return AnalysisStore.validate({
                     format:'ma-f-analysis', version:1, video:currentVideoInfo,
-                    analysis: { tracks, scalePxPerMeter, axis, axisActive, currentTrackId, currentTime:video.currentTime,
+                    analysis: { tracks, scalePxPerMeter, axis, axisActive, measurementStarted, currentTrackId, currentTime:video.currentTime,
                         settings: { fps:Number(fpsInput.value), calibrationLength:Number(calibLengthInput.value), springK:Number(springKInput.value),
                             regressionHalfWindow:Number(regHalfWindowInput.value), massTrack:massTrackSelect.value, springTrack:springTrackSelect.value,
                             mode, autoStep:autoStep.checked, plotRange:chkPlotRange.checked, series:[seriesForce.checked, seriesPos.checked, seriesVel.checked, seriesAcc.checked] }
@@ -719,6 +726,7 @@
                 const a = payload.analysis, s = a.settings;
                 video.pause();
                 tracks = a.tracks; scalePxPerMeter = a.scalePxPerMeter; axis = a.axis; axisActive = a.axisActive;
+                measurementStarted = a.measurementStarted;
                 currentTrackId = a.currentTrackId; trackSelect.value = currentTrackId;
                 calibMode = calibDragging = axisMode = false; calibStart = calibEnd = null;
                 fpsInput.value = s.fps; calibLengthInput.value = s.calibrationLength; springKInput.value = s.springK;
@@ -728,6 +736,7 @@
                 mode = s.mode; btnCalib.disabled = false; btnAxis.disabled = !scalePxPerMeter;
                 btnStartPlot.disabled = !scalePxPerMeter;
                 btnStartPlot.textContent = axisActive ? '計測を停止' : '計測開始';
+                updateMeasurementSetupVisibility();
                 kFPS.textContent = Number(s.fps).toFixed(2);
                 kScale.textContent = scalePxPerMeter ? scalePxPerMeter.toFixed(2) : '--';
                 scaleInfo.textContent = scalePxPerMeter ? `スケール: ${scalePxPerMeter.toFixed(2)} px/m` : 'スケール: 未設定';
@@ -1374,7 +1383,9 @@
             };
             btnStartPlot.onclick = () => {
                 video.pause(); axisMode = false; axisActive = !axisActive;
+                measurementStarted = true;
                 btnStartPlot.textContent = axisActive ? '計測を停止' : '計測開始';
+                updateMeasurementSetupVisibility();
                 dirty = true;
                 drawFrame();
             };
@@ -1518,6 +1529,7 @@
             }
 
             function resetAll() {
+                measurementStarted = false;
                 tracks = Object.fromEntries(TRACKS.map(t => [t.id, { points: [], origin: null }]));
                 currentTrackId = 'obj1';
                 if (trackSelect) trackSelect.value = currentTrackId;
@@ -1532,6 +1544,7 @@
                 btnAxis.disabled = true;
                 btnStartPlot.disabled = true;
                 btnStartPlot.textContent = '計測開始';
+                updateMeasurementSetupVisibility();
                 kScale.textContent = '--';
                 scaleInfo.textContent = 'スケール: 未設定';
                 if (massTrackSelect) massTrackSelect.value = 'obj1';
